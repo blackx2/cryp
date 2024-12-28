@@ -1,0 +1,110 @@
+import hashlib
+import os
+import base64
+import json
+import cirq
+
+
+# Function to generate quantum random numbers using Cirq
+def quantum_random_number(bit_count):
+    """Generates a quantum random number with the specified bit count using Cirq."""
+    qubits = [cirq.LineQubit(i) for i in range(bit_count)]
+    circuit = cirq.Circuit()
+
+    # Apply Hadamard gates to all qubits to create superposition
+    circuit.append(cirq.H.on_each(qubits))
+    circuit.append(cirq.measure(*qubits, key='result'))
+
+    # Simulate the quantum circuit
+    simulator = cirq.Simulator()
+    result = simulator.run(circuit, repetitions=1)
+    measurements = result.measurements['result'][0]  # Single repetition
+    return int("".join(map(str, measurements)), 2)
+
+
+def login_password_to_hash(
+    login, password, salt=None, iterations=100000, quantum_bits=256
+):
+    """Generate a secure hash using login, password, and quantum random entropy."""
+    if salt is None:
+        salt = os.urandom(16)  # Generate a 16-byte random salt
+
+    # Generate a quantum random number and append it to the login and password
+    quantum_entropy = quantum_random_number(quantum_bits)
+    combined_data = f"{login}:{password}:{quantum_entropy}"
+
+    # Derive the hash using PBKDF2-HMAC-SHA256
+    hash_bytes = hashlib.pbkdf2_hmac(
+        'sha256',
+        combined_data.encode(),
+        salt,
+        iterations
+    )
+
+    # Create HMAC for integrity check
+    hmac_key = os.urandom(16)
+    hmac = hashlib.pbkdf2_hmac(
+        'sha256',
+        hash_bytes,
+        hmac_key,
+        iterations
+    )
+
+    # Combine and encode data
+    output_data = {
+        "salt": salt.hex(),
+        "hash": hash_bytes.hex(),
+        "quantum_entropy": quantum_entropy,
+        "iterations": iterations,
+        "hmac": hmac.hex(),
+        "hmac_key": base64.b64encode(hmac_key).decode(),
+    }
+
+    return base64.b64encode(json.dumps(output_data).encode()).decode()
+
+
+def verify_login_password(login, password, stored_data):
+    """Verify the login and password against stored hash data."""
+    # Decode and load the stored data
+    decoded_data = json.loads(base64.b64decode(stored_data).decode())
+    salt = bytes.fromhex(decoded_data["salt"])
+    quantum_entropy = decoded_data["quantum_entropy"]
+    iterations = decoded_data["iterations"]
+    original_hash = bytes.fromhex(decoded_data["hash"])
+    hmac_key = base64.b64decode(decoded_data["hmac_key"])
+    original_hmac = bytes.fromhex(decoded_data["hmac"])
+
+    # Recompute hash
+    combined_data = f"{login}:{password}:{quantum_entropy}"
+    recomputed_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        combined_data.encode(),
+        salt,
+        iterations
+    )
+
+    # Verify hash and HMAC
+    if recomputed_hash != original_hash:
+        return False
+
+    recomputed_hmac = hashlib.pbkdf2_hmac(
+        'sha256',
+        recomputed_hash,
+        hmac_key,
+        iterations
+    )
+    return recomputed_hmac == original_hmac
+
+
+# Example usage
+login = "User123"
+password = "SecurePassword123!"
+
+# Generate hash
+stored_data = login_password_to_hash(login, password)
+
+print("Stored Data (Encoded):", stored_data)
+
+# Verify credentials
+is_valid = verify_login_password(login, password, stored_data)
+print("Is Valid Login:", is_valid)
